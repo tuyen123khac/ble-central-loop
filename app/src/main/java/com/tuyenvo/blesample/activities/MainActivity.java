@@ -46,7 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public class MainActivity extends AppCompatActivity implements ScannedDeviceListener, View.OnClickListener {
+public class MainActivity extends AppCompatActivity implements ScannedDeviceListener {
 
     public static final String TAG = "MainActivity";
     final private int REQUEST_CODE_ASK_PERMISSIONS = 123;
@@ -61,8 +61,6 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     private List<ScanFilter> filters;
     private BluetoothGatt mGatt;
     Boolean mConnected, mInitialized;
-    EditText editText;
-    Button btnScan, btnSend;
     RecyclerView listItemRecyclerView;
     TextView connectedDeviceName, connectedDeviceAddress;
     private BTLEDeviceAdapter adapter;
@@ -75,12 +73,9 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        btnScan = findViewById(R.id.btnScan);
         listItemRecyclerView = findViewById(R.id.listItemRecyclerView);
         connectedDeviceName = findViewById(R.id.connectedDeviceName);
         connectedDeviceAddress = findViewById(R.id.connectedDeviceAddress);
-        editText = findViewById(R.id.editText);
-        btnSend = findViewById(R.id.btnSend);
 
         mConnected = false;
         mInitialized = false;
@@ -89,10 +84,6 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
         rawBTDeviceList = new ArrayList<>();
         adapter = new BTLEDeviceAdapter(mBTDeviceList, this);
         listItemRecyclerView.setAdapter(adapter);
-        btnScan.setOnClickListener(this);
-        btnSend.setOnClickListener(this);
-
-        byte[] bytes = "GREEN".getBytes(Charset.defaultCharset());
 
         mHandler = new Handler();
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
@@ -110,6 +101,30 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     @Override
     protected void onResume() {
         super.onResume();
+        /*startScan();
+
+        mHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                sendMessageToServer();
+            }
+        }, 10000);*/
+
+        Runnable runnable = new Runnable() {
+            @Override
+            public void run() {
+                sendMessageToServer();
+                mHandler.postDelayed(this, 10000);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                startScan();
+            }
+        };
+
+        mHandler.postDelayed(runnable, 10000);
     }
 
     public void startScan() {
@@ -168,7 +183,6 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     private void scanLeDevice(final boolean enable) {
         if (enable) {
             Log.d(TAG, "run: Starting BLE Scan...");
-            btnScan.setText("Scanning");
             Toast.makeText(MainActivity.this, "Starting BLE Scan...", Toast.LENGTH_SHORT).show();
             mHandler.postDelayed(new Runnable() {
                 @Override
@@ -178,7 +192,6 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
                     } else {
                         mLEScanner.stopScan(mScanCallback);
                     }
-                    btnScan.setText("Start Scan");
                     Toast.makeText(MainActivity.this, "Scanned", Toast.LENGTH_SHORT).show();
                 }
             }, SCAN_PERIOD);
@@ -198,6 +211,7 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
 
     private ScanCallback mScanCallback = new ScanCallback() {
 
+        @RequiresApi(api = Build.VERSION_CODES.M)
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
             Log.d("callbackType", String.valueOf(callbackType));
@@ -206,6 +220,7 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
             Log.d(TAG, "onScanResult, run: add device: " + btDevice.getName() + ", " + btDevice.getAddress());
             addDevice(btDevice, result.getRssi());
             rawBTDeviceList.add(btDevice);
+            connectToDevice(mBTDeviceList.get(0));
             //connectToDevice(btDevice);
         }
 
@@ -228,11 +243,13 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
                 public void onLeScan(final BluetoothDevice device, int rssi,
                                      byte[] scanRecord) {
                     runOnUiThread(new Runnable() {
+                        @RequiresApi(api = Build.VERSION_CODES.M)
                         @Override
                         public void run() {
                             Log.d(TAG, "onLeScan, run: add device: " + device.getName() + ", " + device.getAddress());
                             addDevice(device, rssi);
                             rawBTDeviceList.add(device);
+                            connectToDevice(mBTDeviceList.get(0));
                             //connectToDevice(device);
                         }
                     });
@@ -321,6 +338,8 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
             }
             Log.d(TAG, "onCharacteristicChanged: " + messageString);
         }
+
+
     };
 
     private void checkLocationPermission() {
@@ -354,6 +373,12 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     @RequiresApi(api = Build.VERSION_CODES.M)
     @Override
     public void onScannedDeviceClicked(BTLEDevice btleDevice) {
+        Toast.makeText(this, "Block clicking", Toast.LENGTH_SHORT).show();
+
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    private void connectToDevice(BTLEDevice btleDevice) {
         BluetoothDevice tmpDevice = null;
         if (btleDevice.getName() == null) {
             connectedDeviceName.setText("No Name");
@@ -374,35 +399,39 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
         if (tmpDevice != null) {
             connectToDevice(tmpDevice);
         }
-
     }
 
     private void sendMessageToServer() {
+
         if (!mConnected || !mInitialized) {
+            Log.e(TAG, "sendMessageToServer: Connection to server was not establish, make sure Peripheral is advertising");
             return;
         }
+
+        Log.d(TAG, "sendMessageToServer: Connection is ready");
+
+        byte[] byteGreen = "GREEN".getBytes(Charset.defaultCharset());
+        byte[] byteRed = "RED".getBytes(Charset.defaultCharset());
         BluetoothGattService service = mGatt.getService(UUID.fromString(getString(R.string.ble_uuid)));
         BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(getString(R.string.ble_uuid)));
-        String message = editText.getText().toString();
-        editText.setText("");
-        byte[] messageBytes = new byte[0];
+
         try {
-            messageBytes = message.getBytes("UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            Log.e(TAG, "Failed to convert message string to byte array");
+            characteristic.setValue(byteGreen);
+            mGatt.writeCharacteristic(characteristic);
+            Thread.sleep(1000);
+            characteristic.setValue(byteRed);
+            mGatt.writeCharacteristic(characteristic);
+            Thread.sleep(1000);
+            mGatt.disconnect();
+            mGatt.close();
+            mGatt = null;
+            mConnected = false;
+            mInitialized = false;
+            Log.d(TAG, "sendMessageToServer: Closed GATT");
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
-        characteristic.setValue(messageBytes);
-        Boolean success = mGatt.writeCharacteristic(characteristic);
+
     }
 
-    @Override
-    public void onClick(View v) {
-        switch (v.getId()) {
-            case R.id.btnScan:
-                startScan();
-            case R.id.btnSend:
-                sendMessageToServer();
-                break;
-        }
-    }
 }
