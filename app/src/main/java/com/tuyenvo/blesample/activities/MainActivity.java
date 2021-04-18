@@ -39,11 +39,14 @@ import com.tuyenvo.blesample.listeners.ScannedDeviceListener;
 import com.tuyenvo.blesample.models.BTLEDevice;
 
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity implements ScannedDeviceListener {
@@ -60,7 +63,7 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     private ScanSettings settings;
     private List<ScanFilter> filters;
     private BluetoothGatt mGatt;
-    Boolean mConnected, mInitialized;
+    Boolean mConnected, mInitialized, canStartScan;
     RecyclerView listItemRecyclerView;
     TextView connectedDeviceName, connectedDeviceAddress;
     private BTLEDeviceAdapter adapter;
@@ -79,6 +82,7 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
 
         mConnected = false;
         mInitialized = false;
+        canStartScan = true;
         mBTDeviceList = new ArrayList<>();
         mBTDevicesMap = new HashMap<>();
         rawBTDeviceList = new ArrayList<>();
@@ -101,52 +105,34 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
     @Override
     protected void onResume() {
         super.onResume();
-        /*startScan();
-
-        mHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                sendMessageToServer();
-            }
-        }, 10000);*/
-
-        Runnable runnable = new Runnable() {
-            @Override
-            public void run() {
-                sendMessageToServer();
-                mHandler.postDelayed(this, 10000);
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                startScan();
-            }
-        };
-
-        mHandler.postDelayed(runnable, 10000);
+        startScan();
     }
 
     public void startScan() {
-        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
-            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
-        } else {
-            if (Build.VERSION.SDK_INT >= 21) {
-                mLEScanner = mBluetoothAdapter.getBluetoothLeScanner();
-                settings = new ScanSettings.Builder()
-                        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                        .build();
-                filters = new ArrayList<ScanFilter>();
-                ScanFilter filter = new ScanFilter.Builder()
-                        .setServiceUuid(new ParcelUuid(UUID.fromString(getString(R.string.ble_uuid))))
-                        //.setServiceData(new ParcelUuid(UUID.fromString(getString(R.string.ble_uuid))), BLE_ADVERTISE_MESSAGE.getBytes(Charset.forName("UTF-8")))
-                        // Not able to add service data because the byte range is limited
-                        .build();
-                filters.add(filter);
+        if (!mConnected && !mInitialized) {
+            if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
+                Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
+            } else {
+                if (Build.VERSION.SDK_INT >= 21) {
+                    mLEScanner = mBluetoothAdapter.getBluetoothLeScanner();
+                    settings = new ScanSettings.Builder()
+                            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                            .build();
+                    filters = new ArrayList<ScanFilter>();
+                    ScanFilter filter = new ScanFilter.Builder()
+                            .setServiceUuid(new ParcelUuid(UUID.fromString(getString(R.string.ble_uuid))))
+                            //.setServiceData(new ParcelUuid(UUID.fromString(getString(R.string.ble_uuid))), BLE_ADVERTISE_MESSAGE.getBytes(Charset.forName("UTF-8")))
+                            // Not able to add service data because the byte range is limited
+                            .build();
+                    filters.add(filter);
+                }
+                scanLeDevice(true);
             }
-            scanLeDevice(true);
+        } else {
+            Log.d(TAG, "startScan: wait for all callbacks");
         }
+
     }
 
     @Override
@@ -159,13 +145,13 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
 
     @Override
     protected void onDestroy() {
+        super.onDestroy();
         if (mGatt == null) {
             return;
         }
         mGatt.disconnect();
         mGatt.close();
         mGatt = null;
-        super.onDestroy();
     }
 
     @Override
@@ -220,6 +206,8 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
             Log.d(TAG, "onScanResult, run: add device: " + btDevice.getName() + ", " + btDevice.getAddress());
             addDevice(btDevice, result.getRssi());
             rawBTDeviceList.add(btDevice);
+            Log.d(TAG, "onScanResult: " + rawBTDeviceList.toString());
+            Log.d(TAG, "onScanResult: " + mBTDeviceList.toString());
             connectToDevice(mBTDeviceList.get(0));
             //connectToDevice(btDevice);
         }
@@ -307,7 +295,19 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
 
                 characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
                 mInitialized = gatt.setCharacteristicNotification(characteristic, true);
+
                 Log.d(TAG, "onServicesDiscovered: set notification request");
+                if (mConnected && mInitialized) {
+                    Log.d(TAG, "onServicesDiscovered: Start sending RED message.");
+                    byte[] byteRed = "RED".getBytes(Charset.defaultCharset());
+                    characteristic.setValue(byteRed);
+                    gatt.writeCharacteristic(characteristic);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
             }
 
         }
@@ -323,22 +323,55 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
         @Override
         public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
             super.onCharacteristicWrite(gatt, characteristic, status);
-            Log.d(TAG, "onCharacteristicWrite: " + characteristic.getValue() + " written");
+            Log.d(TAG, "onCharacteristicWrite: " + characteristic.getValue().toString() + " written");
         }
 
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
             super.onCharacteristicChanged(gatt, characteristic);
+            byte[] byteGreen = "GREEN".getBytes(Charset.defaultCharset());
+            byte[] byteRed = "RED".getBytes(Charset.defaultCharset());
             byte[] messageBytes = characteristic.getValue();
             String messageString = null;
             try {
                 messageString = new String(messageBytes, "UTF-8");
-            } catch (UnsupportedEncodingException e) {
+                Log.d(TAG, "onCharacteristicChanged: " + messageString);
+                if (messageString.equals("DER")) {
+                    Log.d(TAG, "onCharacteristicChanged: case DER");
+                    characteristic.setValue(byteGreen);
+                    gatt.writeCharacteristic(characteristic);
+                    Thread.sleep(1000);
+                } else if (messageString.equals("NEERG")) {
+                    Log.d(TAG, "onCharacteristicChanged: case NEERG, stop");
+                    Thread.sleep(1000);
+                    mGatt.disconnect();
+                    mGatt.close();
+                    mGatt = null;
+                    mConnected = false;
+                    mInitialized = false;
+                    canStartScan = false;
+                    try {
+                        // BluetoothGatt gatt
+                        final Method refresh = gatt.getClass().getMethod("refresh");
+                        if (refresh != null) {
+                            refresh.invoke(mGatt);
+                        }
+                    } catch (Exception e) {
+                        // Log it
+                    }
+                    Log.d(TAG, "onCharacteristicChanged: Closed GATT");
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            startScan();
+                        }
+                    });
+                }
+            } catch (UnsupportedEncodingException | InterruptedException e) {
                 Log.e(TAG, "Unable to convert message bytes to string");
             }
-            Log.d(TAG, "onCharacteristicChanged: " + messageString);
-        }
 
+        }
 
     };
 
@@ -416,6 +449,7 @@ public class MainActivity extends AppCompatActivity implements ScannedDeviceList
         BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(getString(R.string.ble_uuid)));
 
         try {
+            Log.d(TAG, "sendMessageToServer: Start sending message.");
             characteristic.setValue(byteGreen);
             mGatt.writeCharacteristic(characteristic);
             Thread.sleep(1000);
